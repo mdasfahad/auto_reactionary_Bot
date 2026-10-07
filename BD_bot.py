@@ -18,7 +18,7 @@ Features:
 - How to Use
 
 Env:
-  BOT_TOKEN=...
+  BOT_TOKEN=8865204426:AAH2LcI6nJmIdrx_LpsrB2Yf8xKXC7b-hDs
   OWNER_ID=8289191009
 """
 
@@ -42,7 +42,7 @@ from telebot import types
 
 # ================== CONFIG ==================
 # সবচেয়ে সহজ: নিচের লাইনে BotFather টোকেন বসান
-BOT_TOKEN_HERE = "8865204426:AAH2LcI6nJmIdrx_LpsrB2Yf8xKXC7b-hDs"
+BOT_TOKEN_HERE = "8865204426:AAF1jIpU4OOlUQYmzgyYB4vmzSaw20YU4tE"
 OWNER_ID_HERE = 8289191009
 
 TOKEN = (
@@ -192,12 +192,23 @@ def init_db():
             "currency": "BDT",
             "min_deposit": "100",
             "bot_enabled": "1",
+            "wallet_enabled": "1",
+            "binance_enabled": "1",
+            "manual_pay_enabled": "1",
+            "max_user_channels": "10",
             "support_username": "@support",
             "binance_api_key": "",
             "binance_secret_key": "",
             "binance_pay_id": "",
             "binance_address": "",
+            "binance_network": "BSC BNB Smart Chain (BEP20)",
             "binance_min_usdt": "1",
+            "maintenance_text": (
+                "সাময়িক রক্ষণাবেক্ষণ চলছে।\n"
+                "আমাদের বটে কিছু কাজ চলছে।\n"
+                "সাধারণত ঠিক করতে ২৪ ঘণ্টা সময় লাগতে পারে।\n"
+                "Admin শীঘ্রই চালু করে দেবে।"
+            ),
             "owner_id": str(OWNER_ID),
         }
         for k, v in defaults.items():
@@ -551,11 +562,23 @@ def admin_panel_kb():
         types.InlineKeyboardButton("💾 Backup Source", callback_data="adm_backup"),
     )
     on = get_setting("bot_enabled", "1") == "1"
+    wal = get_setting("wallet_enabled", "1") == "1"
+    bn = get_setting("binance_enabled", "1") == "1"
     kb.add(
         types.InlineKeyboardButton(
             "Bot: %s" % ("ON 🟢" if on else "OFF 🔴"),
             callback_data="adm_bot_toggle",
         )
+    )
+    kb.add(
+        types.InlineKeyboardButton(
+            "Wallet: %s" % ("ON" if wal else "OFF"),
+            callback_data="adm_wal_toggle",
+        ),
+        types.InlineKeyboardButton(
+            "Binance: %s" % ("ON" if bn else "OFF"),
+            callback_data="adm_bn_toggle",
+        ),
     )
     return kb
 
@@ -634,8 +657,10 @@ def channels_admin_kb():
 
 def wallet_kb():
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("💳 Deposit", callback_data="wal_dep"))
-    kb.add(types.InlineKeyboardButton("💛 Binance Instant", callback_data="wal_bn"))
+    if get_setting("manual_pay_enabled", "1") == "1":
+        kb.add(types.InlineKeyboardButton("💳 Deposit (bKash/Nagad/Rocket)", callback_data="wal_dep"))
+    if get_setting("binance_enabled", "1") == "1":
+        kb.add(types.InlineKeyboardButton("💛 Binance Instant (BEP20)", callback_data="wal_bn"))
     return kb
 
 
@@ -779,6 +804,17 @@ def cmd_start(message):
         bot.reply_to(message, "You are blocked.")
         return
     ensure_user(message.from_user)
+    # Maintenance: still allow start/menu, but show notice (orders blocked separately)
+    if get_setting("bot_enabled", "1") != "1" and not is_admin(uid):
+        bot.reply_to(
+            message,
+            get_setting(
+                "maintenance_text",
+                "Bot temporary maintenance. Try again later.",
+            ),
+            reply_markup=main_menu_kb(uid),
+        )
+        return
     missing = check_force_join(uid)
     if missing and not is_admin(uid):
         bot.reply_to(
@@ -790,8 +826,9 @@ def cmd_start(message):
     bot.send_message(
         message.chat.id,
         "Auto Reaction Bot\n\n"
-        "Channel-e post hole automatic reaction/views order jabe.\n\n"
-        "Menu theke setup korun.",
+        "Nijer channel add korun (max 10).\n"
+        "Post hole automatic reaction/views order jabe.\n\n"
+        "Bot ke channel e ADMIN din.",
         reply_markup=main_menu_kb(uid),
     )
 
@@ -865,47 +902,101 @@ def btn_qty(message):
         bot.reply_to(message, "Default Quantity: %s\n(Admin change korte parbe)" % q)
 
 
+def user_channels_kb(uid):
+    """User can add/toggle/delete own channels (max 10)."""
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT * FROM channels WHERE owner_user_id=? ORDER BY id DESC",
+        (uid,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    max_ch = int(get_setting("max_user_channels", "10") or 10)
+    for r in rows:
+        flag = "ON" if int(r["enabled"] or 0) else "OFF"
+        title = (r["title"] or r["chat_id"] or "?")[:28]
+        kb.add(
+            types.InlineKeyboardButton(
+                "%s | %s" % (flag, title),
+                callback_data="uch_info_%s" % r["id"],
+            )
+        )
+        kb.add(
+            types.InlineKeyboardButton(
+                "Toggle", callback_data="uch_tog_%s" % r["id"]
+            ),
+            types.InlineKeyboardButton(
+                "Delete", callback_data="uch_del_%s" % r["id"]
+            ),
+        )
+    if len(rows) < max_ch:
+        kb.add(
+            types.InlineKeyboardButton(
+                "➕ Add Channel (%s/%s)" % (len(rows), max_ch),
+                callback_data="uch_add",
+            )
+        )
+    else:
+        kb.add(
+            types.InlineKeyboardButton(
+                "Limit %s/%s reached" % (len(rows), max_ch),
+                callback_data="noop",
+            )
+        )
+    return kb
+
+
 @bot.message_handler(func=lambda m: m.text == "📢 Channels")
 def btn_channels(message):
     uid = message.from_user.id
+    ensure_user(message.from_user)
+    max_ch = int(get_setting("max_user_channels", "10") or 10)
     conn = get_conn()
     c = conn.cursor()
-    if is_admin(uid):
-        c.execute("SELECT * FROM channels ORDER BY id DESC LIMIT 20")
-    else:
-        c.execute(
-            "SELECT * FROM channels WHERE owner_user_id=? ORDER BY id DESC LIMIT 20",
-            (uid,),
-        )
+    c.execute(
+        "SELECT COUNT(*) AS n FROM channels WHERE owner_user_id=?", (uid,)
+    )
+    n = int(c.fetchone()["n"])
+    c.execute(
+        "SELECT * FROM channels WHERE owner_user_id=? ORDER BY id DESC",
+        (uid,),
+    )
     rows = c.fetchall()
     conn.close()
+    lines = [
+        "Your Channels (%s/%s)\n" % (n, max_ch),
+        "Bot must be ADMIN in each channel.\n",
+    ]
     if not rows:
-        bot.reply_to(
-            message,
-            "No channels.\nAdmin Panel → Channels → Add\n"
-            "Bot must be ADMIN in the channel.",
-        )
-        return
-    lines = ["Channels:\n"]
-    for r in rows:
-        lines.append(
-            "%s #%s %s\n  chat: %s\n  qty: %s | svc: %s"
-            % (
-                "ON" if int(r["enabled"] or 0) else "OFF",
-                r["id"],
-                r["title"] or "-",
-                r["chat_id"],
-                r["quantity"],
-                r["service_id"] or get_setting("service_id") or "-",
+        lines.append("No channel yet. Add with ➕ button.")
+    else:
+        for r in rows:
+            lines.append(
+                "%s #%s %s\n  %s | qty %s"
+                % (
+                    "ON" if int(r["enabled"] or 0) else "OFF",
+                    r["id"],
+                    r["title"] or "-",
+                    r["chat_id"],
+                    r["quantity"],
+                )
             )
-        )
-    bot.reply_to(message, "\n".join(lines))
+    bot.reply_to(
+        message,
+        "\n".join(lines),
+        reply_markup=user_channels_kb(uid),
+    )
 
 
 @bot.message_handler(func=lambda m: m.text == "💼 Wallet")
 def btn_wallet(message):
     uid = message.from_user.id
     ensure_user(message.from_user)
+    if get_setting("wallet_enabled", "1") != "1" and not is_admin(uid):
+        bot.reply_to(message, "Wallet system is OFF by admin.")
+        return
     bal = get_balance(uid)
     bot.reply_to(
         message,
@@ -989,6 +1080,9 @@ def on_channel_edit(message):
 def cb_wal_dep(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
+    if get_setting("manual_pay_enabled", "1") != "1":
+        bot.send_message(call.message.chat.id, "Manual deposit is OFF.")
+        return
     conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT * FROM pay_methods WHERE active=1")
@@ -1005,7 +1099,7 @@ def cb_wal_dep(call):
     if not rows:
         bot.send_message(
             call.message.chat.id,
-            "No manual methods. Admin → Pay Methods add korun.\nOr use Binance Instant.",
+            "No manual methods. Admin → Pay Methods → ➕ Add.\nOr use Binance Instant.",
         )
         return
     bot.send_message(call.message.chat.id, "Method choose korun:", reply_markup=kb)
@@ -1027,10 +1121,21 @@ def cb_dep_method(call):
         bot.answer_callback_query(call.id, "Not found")
         return
     bot.answer_callback_query(call.id)
-    user_state[uid] = {"action": "dep_amount", "method_id": mid, "method": m["method"], "number": m["number"]}
+    user_state[uid] = {
+        "action": "dep_amount",
+        "method_id": mid,
+        "method": m["method"],
+        "number": m["number"],
+    }
     bot.send_message(
         call.message.chat.id,
-        "%s number: %s\n\nKoto taka deposit korben? (min %s)"
+        "%s number: %s\n\n"
+        "Koto taka deposit korben? (min %s)\n\n"
+        "IMPORTANT:\n"
+        "• ONLY Send Money (Cash Out NA)\n"
+        "• Joto taka bola hobe THIK otoy taka pathaben\n"
+        "• Button phone: bKash/Nagad app → Send Money → number e amount\n"
+        "• Pore Transaction ID din"
         % (m["method"], m["number"], get_setting("min_deposit", "100")),
     )
 
@@ -1039,14 +1144,24 @@ def cb_dep_method(call):
 def cb_wal_bn(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    if not get_setting("binance_api_key"):
+    if get_setting("binance_enabled", "1") != "1":
+        bot.send_message(call.message.chat.id, "Binance Instant is OFF.")
+        return
+    if not get_setting("binance_api_key") and not get_setting("binance_address"):
         bot.send_message(call.message.chat.id, "Binance not configured by admin.")
         return
     user_state[uid] = {"action": "bn_amount"}
     bot.send_message(
         call.message.chat.id,
-        "Binance Instant\n\nUSD/USDT amount likhun (min %s):"
-        % get_setting("binance_min_usdt", "1"),
+        "Binance Instant Verify\n\n"
+        "Network: %s\n"
+        "Amount USDT ($) likhun (min %s):\n\n"
+        "Warning: wrong network = money loss.\n"
+        "Only BEP20 / as admin set."
+        % (
+            get_setting("binance_network", "BSC BNB Smart Chain (BEP20)"),
+            get_setting("binance_min_usdt", "1"),
+        ),
     )
 
 
@@ -1127,29 +1242,60 @@ def cb_admin(call):
         return
 
     if data == "adm_pay":
-        user_state[uid] = {"action": "pay_method"}
-        bot.send_message(
-            chat_id,
-            "Pay method format:\nMethod | Name | Number\n"
-            "Example: bKash | Personal | 01XXXXXXXXX",
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT * FROM pay_methods WHERE active=1")
+        rows = c.fetchall()
+        conn.close()
+        lines = ["Pay Methods (bKash/Nagad/Rocket):\n"]
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        if not rows:
+            lines.append("None yet.")
+        for r in rows:
+            lines.append(
+                "#%s %s | %s | %s" % (r["id"], r["method"], r["name"], r["number"])
+            )
+            kb.add(
+                types.InlineKeyboardButton(
+                    "🗑 Delete #%s" % r["id"],
+                    callback_data="pay_del_%s" % r["id"],
+                )
+            )
+        kb.add(types.InlineKeyboardButton("➕ Add Method", callback_data="pay_add"))
+        on = get_setting("manual_pay_enabled", "1") == "1"
+        kb.add(
+            types.InlineKeyboardButton(
+                "Manual Pay: %s" % ("ON" if on else "OFF"),
+                callback_data="pay_toggle",
+            )
         )
+        bot.send_message(chat_id, "\n".join(lines), reply_markup=kb)
         return
 
     if data == "adm_binance":
         kb = types.InlineKeyboardMarkup(row_width=1)
+        en = get_setting("binance_enabled", "1") == "1"
+        kb.add(
+            types.InlineKeyboardButton(
+                "Instant Verify: %s" % ("ON" if en else "OFF"),
+                callback_data="bn_toggle",
+            )
+        )
         kb.add(types.InlineKeyboardButton("API Key", callback_data="bn_key"))
         kb.add(types.InlineKeyboardButton("Secret Key", callback_data="bn_sec"))
         kb.add(types.InlineKeyboardButton("Pay ID", callback_data="bn_payid"))
-        kb.add(types.InlineKeyboardButton("Address", callback_data="bn_addr"))
+        kb.add(types.InlineKeyboardButton("Address (BEP20)", callback_data="bn_addr"))
         bot.send_message(
             chat_id,
             "Binance Instant Setup\n\n"
+            "Network: %s\n"
             "API: %s\nSecret: %s\nPayID: %s\nAddress: %s"
             % (
+                get_setting("binance_network", "BSC BEP20"),
                 "set" if get_setting("binance_api_key") else "empty",
                 "set" if get_setting("binance_secret_key") else "empty",
                 get_setting("binance_pay_id") or "empty",
-                (get_setting("binance_address") or "empty")[:20],
+                (get_setting("binance_address") or "empty")[:24],
             ),
             reply_markup=kb,
         )
@@ -1232,6 +1378,26 @@ def cb_admin(call):
         )
         return
 
+    if data == "adm_wal_toggle":
+        cur = get_setting("wallet_enabled", "1")
+        set_setting("wallet_enabled", "0" if cur == "1" else "1")
+        bot.send_message(
+            chat_id,
+            "Wallet %s" % ("OFF" if cur == "1" else "ON"),
+            reply_markup=admin_panel_kb(),
+        )
+        return
+
+    if data == "adm_bn_toggle":
+        cur = get_setting("binance_enabled", "1")
+        set_setting("binance_enabled", "0" if cur == "1" else "1")
+        bot.send_message(
+            chat_id,
+            "Binance Instant %s" % ("OFF" if cur == "1" else "ON"),
+            reply_markup=admin_panel_kb(),
+        )
+        return
+
     if data == "adm_backup":
         bot.send_message(chat_id, "Preparing backup…")
         try:
@@ -1255,16 +1421,103 @@ def cb_admin(call):
         return
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "ch_add")
-def cb_ch_add(call):
-    if not is_admin(call.from_user.id):
-        return
+@bot.callback_query_handler(func=lambda c: c.data == "noop")
+def cb_noop(call):
     bot.answer_callback_query(call.id)
-    user_state[call.from_user.id] = {"action": "ch_add"}
+
+
+@bot.callback_query_handler(func=lambda c: c.data in ("ch_add", "uch_add"))
+def cb_ch_add(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    # Users can add own channels; admins too
+    max_ch = int(get_setting("max_user_channels", "10") or 10)
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) AS n FROM channels WHERE owner_user_id=?", (uid,)
+    )
+    n = int(c.fetchone()["n"])
+    conn.close()
+    if n >= max_ch and not is_admin(uid):
+        bot.send_message(
+            call.message.chat.id,
+            "Maximum %s channels. Delete one first." % max_ch,
+        )
+        return
+    user_state[uid] = {"action": "ch_add"}
     bot.send_message(
         call.message.chat.id,
-        "Channel forward korun OR chat id / @username likhun.\n"
-        "Bot must already be ADMIN in that channel.",
+        "Channel add:\n"
+        "• @username likhun\n"
+        "• OR channel theke ekta post FORWARD korun\n"
+        "• OR chat id (-100...)\n\n"
+        "Bot ke oi channel e ADMIN rakhte hobe.\n"
+        "Cancel = cancel",
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("uch_tog_"))
+def cb_uch_tog(call):
+    uid = call.from_user.id
+    try:
+        cid = int(call.data.split("_")[2])
+    except Exception:
+        return
+    with DB_LOCK:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "SELECT * FROM channels WHERE id=? AND owner_user_id=?",
+            (cid, uid),
+        )
+        r = c.fetchone()
+        if not r and not is_admin(uid):
+            conn.close()
+            bot.answer_callback_query(call.id, "Not yours", show_alert=True)
+            return
+        if not r and is_admin(uid):
+            c.execute("SELECT * FROM channels WHERE id=?", (cid,))
+            r = c.fetchone()
+        if not r:
+            conn.close()
+            return
+        newv = 0 if int(r["enabled"] or 0) else 1
+        c.execute("UPDATE channels SET enabled=? WHERE id=?", (newv, cid))
+        conn.commit()
+        conn.close()
+    bot.answer_callback_query(call.id, "Toggled")
+    bot.send_message(
+        call.message.chat.id,
+        "Channel updated.",
+        reply_markup=user_channels_kb(uid),
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("uch_del_"))
+def cb_uch_del(call):
+    uid = call.from_user.id
+    try:
+        cid = int(call.data.split("_")[2])
+    except Exception:
+        return
+    with DB_LOCK:
+        conn = get_conn()
+        c = conn.cursor()
+        if is_admin(uid):
+            c.execute("DELETE FROM channels WHERE id=?", (cid,))
+        else:
+            c.execute(
+                "DELETE FROM channels WHERE id=? AND owner_user_id=?",
+                (cid, uid),
+            )
+        conn.commit()
+        conn.close()
+    bot.answer_callback_query(call.id, "Deleted")
+    bot.send_message(
+        call.message.chat.id,
+        "Channel deleted.",
+        reply_markup=user_channels_kb(uid),
     )
 
 
@@ -1340,21 +1593,76 @@ def cb_fc_del(call):
 
 
 @bot.callback_query_handler(
-    func=lambda c: c.data in ("bn_key", "bn_sec", "bn_payid", "bn_addr")
+    func=lambda c: c.data in ("bn_key", "bn_sec", "bn_payid", "bn_addr", "bn_toggle")
 )
 def cb_bn_fields(call):
     if not is_admin(call.from_user.id):
+        return
+    if call.data == "bn_toggle":
+        cur = get_setting("binance_enabled", "1")
+        set_setting("binance_enabled", "0" if cur == "1" else "1")
+        bot.answer_callback_query(call.id, "Toggled")
+        bot.send_message(
+            call.message.chat.id,
+            "Binance Instant: %s" % ("OFF" if cur == "1" else "ON"),
+        )
         return
     mapping = {
         "bn_key": ("binance_api_key", "Binance API Key:"),
         "bn_sec": ("binance_secret_key", "Binance Secret Key:"),
         "bn_payid": ("binance_pay_id", "Binance Pay ID:"),
-        "bn_addr": ("binance_address", "Binance Address:"),
+        "bn_addr": (
+            "binance_address",
+            "USDT Address (BSC BEP20):\nNetwork: BNB Smart Chain (BEP20)",
+        ),
     }
     key, prompt = mapping[call.data]
     user_state[call.from_user.id] = {"action": "set_setting", "key": key}
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, prompt)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "pay_add")
+def cb_pay_add(call):
+    if not is_admin(call.from_user.id):
+        return
+    bot.answer_callback_query(call.id)
+    user_state[call.from_user.id] = {"action": "pay_method_name"}
+    bot.send_message(
+        call.message.chat.id,
+        "Method name likhun:\nbKash / Nagad / Rocket / Other",
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "pay_toggle")
+def cb_pay_toggle(call):
+    if not is_admin(call.from_user.id):
+        return
+    cur = get_setting("manual_pay_enabled", "1")
+    set_setting("manual_pay_enabled", "0" if cur == "1" else "1")
+    bot.answer_callback_query(call.id, "Toggled")
+    bot.send_message(
+        call.message.chat.id,
+        "Manual pay: %s" % ("OFF" if cur == "1" else "ON"),
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("pay_del_"))
+def cb_pay_del(call):
+    if not is_admin(call.from_user.id):
+        return
+    try:
+        pid = int(call.data.split("_")[2])
+    except Exception:
+        return
+    with DB_LOCK:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("UPDATE pay_methods SET active=0 WHERE id=?", (pid,))
+        conn.commit()
+        conn.close()
+    bot.answer_callback_query(call.id, "Deleted")
+    bot.send_message(call.message.chat.id, "Method removed.")
 
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("dep_ok_"))
@@ -1582,9 +1890,18 @@ def state_flow(message):
         return
 
     if action == "ch_add":
-        if not is_admin(uid):
+        max_ch = int(get_setting("max_user_channels", "10") or 10)
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "SELECT COUNT(*) AS n FROM channels WHERE owner_user_id=?", (uid,)
+        )
+        n = int(c.fetchone()["n"])
+        conn.close()
+        if n >= max_ch and not is_admin(uid):
+            user_state.pop(uid, None)
+            bot.reply_to(message, "Max %s channels." % max_ch)
             return
-        # accept @username or -100id or forwarded
         chat_id = None
         title = None
         username = None
@@ -1601,7 +1918,11 @@ def state_flow(message):
                     title = ch.title
                     username = ch.username
                 except Exception as e:
-                    bot.reply_to(message, "Cannot access chat: %s\nBot admin?" % e)
+                    bot.reply_to(
+                        message,
+                        "Cannot access chat: %s\n"
+                        "Bot ke channel e ADMIN din, then again try." % e,
+                    )
                     return
             else:
                 chat_id = t
@@ -1629,9 +1950,12 @@ def state_flow(message):
         user_state.pop(uid, None)
         bot.reply_to(
             message,
-            "Channel saved: %s (%s)\nEnabled ON.\nBot must be admin there."
+            "Channel saved: %s (%s)\n"
+            "Status: ON\n"
+            "Bot must be ADMIN in this channel.\n"
+            "Post korle auto reaction order jabe."
             % (title, chat_id),
-            reply_markup=channels_admin_kb(),
+            reply_markup=user_channels_kb(uid),
         )
         return
 
@@ -1675,6 +1999,36 @@ def state_flow(message):
             conn.close()
         user_state.pop(uid, None)
         bot.reply_to(message, "Force channel added: %s" % title)
+        return
+
+    if action == "pay_method_name":
+        if not is_admin(uid):
+            return
+        st["method"] = text[:32]
+        st["action"] = "pay_method_number"
+        user_state[uid] = st
+        bot.reply_to(
+            message,
+            "Number din (je number e Send Money hobe):\nExample: 01XXXXXXXXX",
+        )
+        return
+
+    if action == "pay_method_number":
+        if not is_admin(uid):
+            return
+        method = st.get("method") or "bKash"
+        number = text.strip()
+        with DB_LOCK:
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO pay_methods (method, name, number, active) VALUES (?,?,?,1)",
+                (method, method, number),
+            )
+            conn.commit()
+            conn.close()
+        user_state.pop(uid, None)
+        bot.reply_to(message, "Saved: %s → %s" % (method, number))
         return
 
     if action == "pay_method":
@@ -1947,26 +2301,33 @@ def state_flow(message):
 def cb_bn_method(call):
     uid = call.from_user.id
     st = user_state.get(uid) or {}
-    if st.get("action") not in ("bn_choose", "bn_amount"):
-        # allow if amount stored
-        if not st.get("amount"):
-            bot.answer_callback_query(call.id, "Start from Wallet → Binance")
-            return
+    if not st.get("amount"):
+        bot.answer_callback_query(call.id, "Start from Wallet → Binance")
+        return
     bot.answer_callback_query(call.id)
     amount = st.get("amount")
+    network = get_setting("binance_network", "BSC BNB Smart Chain (BEP20)")
     if call.data == "bnm_id":
         target = get_setting("binance_pay_id") or "NOT SET"
         label = "Pay ID"
+        extra = "Binance app → Pay → Pay ID e pathan."
     else:
         target = get_setting("binance_address") or "NOT SET"
         label = "Address"
+        extra = (
+            "Network MUST be: %s\n"
+            "USDT (BEP20) only. Wrong chain = lost funds."
+            % network
+        )
     st["action"] = "bn_trx"
     user_state[uid] = st
     bot.send_message(
         call.message.chat.id,
-        "Send %s USDT to this %s:\n\n%s\n\n"
+        "Send %s USDT ($)\n\n"
+        "%s:\n%s\n\n"
+        "%s\n\n"
         "Payment er por Transaction / Order ID likhun:"
-        % (amount, label, target),
+        % (amount, label, target, extra),
     )
 
 
