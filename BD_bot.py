@@ -18,7 +18,7 @@ Features:
 - How to Use
 
 Env:
-  BOT_TOKEN=8865204426:AAH2LcI6nJmIdrx_LpsrB2Yf8xKXC7b-hDs
+  BOT_TOKEN=...
   OWNER_ID=8289191009
 """
 
@@ -42,7 +42,7 @@ from telebot import types
 
 # ================== CONFIG ==================
 # সবচেয়ে সহজ: নিচের লাইনে BotFather টোকেন বসান
-BOT_TOKEN_HERE = "8865204426:AAF1jIpU4OOlUQYmzgyYB4vmzSaw20YU4tE"
+BOT_TOKEN_HERE = "8865204426:AAH2LcI6nJmIdrx_LpsrB2Yf8xKXC7b-hDs"
 OWNER_ID_HERE = 8289191009
 
 TOKEN = (
