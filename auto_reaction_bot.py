@@ -41,13 +41,29 @@ import telebot
 from telebot import types
 
 # ================== CONFIG ==================
-TOKEN = os.environ.get("BOT_TOKEN", "").strip() or os.environ.get("8865204426:AAF1jIpU4OOlUQYmzgyYB4vmzSaw20YU4tE", "").strip()
-OWNER_ID = int(os.environ.get("OWNER_ID", "8289191009"))
+# সবচেয়ে সহজ: নিচের লাইনে BotFather টোকেন বসান
+BOT_TOKEN_HERE = ""  # উদাহরণ: "7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxx"
+OWNER_ID_HERE = 8289191009  # আপনার Telegram numeric ID
+
+TOKEN = (
+    (BOT_TOKEN_HERE or "").strip()
+    or os.environ.get("BOT_TOKEN", "").strip()
+    or os.environ.get("8865204426:AAF1jIpU4OOlUQYmzgyYB4vmzSaw20YU4tE", "").strip()
+)
+OWNER_ID = int(
+    os.environ.get("OWNER_ID", "").strip() or OWNER_ID_HERE or 8289191009
+)
 ADMIN_ID = int(os.environ.get("ADMIN_ID", str(OWNER_ID)))
 DB_PATH = os.environ.get("AR_DB", "auto_reaction.db")
 
 if not TOKEN:
-    raise SystemExit("Set BOT_TOKEN environment variable")
+    raise SystemExit(
+        "BOT_TOKEN missing!\n"
+        "1) auto_reaction_bot.py খুলুন\n"
+        "2) BOT_TOKEN_HERE = \"BotFather_token\" লিখুন\n"
+        "   অথবা: export BOT_TOKEN=\"token\"\n"
+        "3) আবার চালান"
+    )
 
 logging.basicConfig(
     level=logging.INFO,
