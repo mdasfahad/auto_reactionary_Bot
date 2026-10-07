@@ -531,6 +531,7 @@ def admin_panel_kb():
         types.InlineKeyboardButton("➖ Remove Admin", callback_data="adm_rmadmin"),
     )
     kb.add(
+        types.InlineKeyboardButton("🔄 Ownership Transfer", callback_data="adm_owner"),
         types.InlineKeyboardButton("💾 Backup Source", callback_data="adm_backup"),
     )
     on = get_setting("bot_enabled", "1") == "1"
@@ -1223,6 +1224,20 @@ def cb_admin(call):
             bot.send_message(chat_id, "Backup error: %s" % e)
         return
 
+    if data == "adm_owner":
+        if not is_main_owner(uid):
+            bot.send_message(chat_id, "Only Main Owner can transfer ownership.")
+            return
+        user_state[uid] = {"action": "owner_transfer"}
+        bot.send_message(
+            chat_id,
+            "Ownership Transfer\n\n"
+            "New Owner er Telegram User ID likhun:\n"
+            "(example: 8289191009)\n\n"
+            "Cancel likhle batil.",
+        )
+        return
+
 
 @bot.callback_query_handler(func=lambda c: c.data == "ch_add")
 def cb_ch_add(call):
@@ -1826,18 +1841,22 @@ def state_flow(message):
         load_admins()
         user_state.pop(uid, None)
         bot.reply_to(message, "Admin added %s" % tid)
+        try:
+            bot.send_message(tid, "You are now admin of Auto Reaction Bot.")
+        except Exception:
+            pass
         return
 
     if action == "rm_admin":
         if not is_main_owner(uid):
-            bot.reply_to(message, "Only owner")
+            bot.reply_to(message, "Only Main Owner can remove admin")
             return
         try:
             tid = int(text)
         except Exception:
             bot.reply_to(message, "user_id")
             return
-        if tid == OWNER_ID:
+        if tid == int(get_setting("owner_id", str(OWNER_ID)) or OWNER_ID):
             bot.reply_to(message, "Cannot remove main owner")
             return
         with DB_LOCK:
@@ -1848,7 +1867,43 @@ def state_flow(message):
             conn.close()
         load_admins()
         user_state.pop(uid, None)
-        bot.reply_to(message, "Removed %s" % tid)
+        bot.reply_to(message, "Admin removed: %s" % tid)
+        return
+
+    if action == "owner_transfer":
+        if not is_main_owner(uid):
+            user_state.pop(uid, None)
+            bot.reply_to(message, "Only Main Owner")
+            return
+        try:
+            new_owner = int(text)
+        except Exception:
+            bot.reply_to(message, "Invalid user ID")
+            return
+        set_setting("owner_id", str(new_owner))
+        with DB_LOCK:
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute(
+                "INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (new_owner,)
+            )
+            conn.commit()
+            conn.close()
+        load_admins()
+        user_state.pop(uid, None)
+        bot.reply_to(
+            message,
+            "Ownership transferred.\nNew Owner ID: %s\n"
+            "Restart bot recommended (OWNER_ID env update optional)."
+            % new_owner,
+        )
+        try:
+            bot.send_message(
+                new_owner,
+                "You are now Main Owner of Auto Reaction Bot.",
+            )
+        except Exception:
+            pass
         return
 
     if action == "broadcast":
